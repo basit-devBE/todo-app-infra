@@ -51,9 +51,17 @@ CI/CD workflow) with `s3:PutObject`/`s3:DeleteObject` on the templates bucket.
 These exist before `root-stack.yaml` can be created, since the stack's own creation depends on
 them:
 
-1. **S3 templates bucket** — `todo-app-infra-templates-eu-central-1-124355645722`. Create it
-   and run `./setup.sh`, then push once to populate `stacks/` via the pre-push hook.
-2. **A real placeholder image in ECR** for the initial task definition (`AppImageUri` in
+1. **S3 templates bucket** — `todo-app-infra-templates-eu-central-1-124355645722` (created,
+   versioned, encrypted, public access blocked). Run `./setup.sh`, then push once to populate
+   `stacks/` via the pre-push hook.
+2. **Git sync deployment role** — `arn:aws:iam::124355645722:role/todo-app-cfn-deployment`
+   (created). Trusts `cloudformation.amazonaws.com` and
+   `cloudformation.sync.codeconnections.amazonaws.com` (scoped to this account's existing
+   CodeConnections GitHub connection), and is permission-scoped to `todo-app-*` resources —
+   including RDS Proxy and ElastiCache actions, which this account's other GitSync roles
+   (`Synccloudformation`, `photouploader-cfn-deployment`) don't have. Select **Existing IAM
+   role** in the console's Git sync stack-creation step and pick this one.
+3. **A real placeholder image in ECR** for the initial task definition (`AppImageUri` in
    `deployment-file.yaml`) — the ECS service must reach a healthy steady state during stack
    creation, before the app repo's pipeline has ever run. This reuses the shared bootstrap
    image already in this account (`ecs-lab-bootstrap:latest`); point it at any image that
