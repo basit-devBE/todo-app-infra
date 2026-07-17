@@ -1,0 +1,20 @@
+template-file-path: root-stack.yaml
+parameters:
+  ProjectName: todo-app
+  TemplatesBucketName: todo-app-infra-templates-eu-central-1-124355645722
+  GitHubOidcProviderArn: arn:aws:iam::124355645722:oidc-provider/token.actions.githubusercontent.com
+  GitHubOrg: basit-devBE
+  GitHubAppRepo: todo-app-code
+  GitHubBranch: main
+  # Bootstraps the first ECS service deploy (serves 200 on /actuator/health)
+  # until the real pipeline pushes the actual app image via blue/green.
+  # Reuses the shared bootstrap image from the ecscicd lab in this account.
+  AppImageUri: 124355645722.dkr.ecr.eu-central-1.amazonaws.com/ecs-lab-bootstrap:latest
+  DBInstanceClass: db.t3.micro
+  DBName: tododb
+capabilities:
+  - CAPABILITY_NAMED_IAM
+  - CAPABILITY_AUTO_EXPAND
+tags:
+  Project: todo-app
+  ManagedBy: CloudFormation-GitSync

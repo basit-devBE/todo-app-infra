@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - root stack wiring all nested child stacks together: network,
+  security, database (RDS + RDS Proxy), cache (ElastiCache Redis), ECR,
+  IAM, compute (ECS/ALB), autoscaling, and the CI/CD pipeline.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+
+  TemplatesBucketName:
+    Type: String
+    Description: S3 bucket that the child stack templates are synced to before each deploy
+
+  GitHubOidcProviderArn:
+    Type: String
+    Description: ARN of the existing GitHub Actions OIDC provider in this account
+
+  GitHubOrg:
+    Type: String
+    Default: basit-devBE
+
+  GitHubAppRepo:
+    Type: String
+    Default: todo-app-code
+
+  GitHubBranch:
+    Type: String
+    Default: main
+
+  AppImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI (repo:tag) used to seed the ECS task definition.
+      Must already exist in ECR before this stack is created/updated.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+
+  DBName:
+    Type: String
+    Default: tododb
+
+  CacheNodeType:
+    Type: String
+    Default: cache.t3.micro
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/security.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/database.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        DataSubnet1Id: !GetAtt NetworkStack.Outputs.DataSubnet1Id
+        DataSubnet2Id: !GetAtt NetworkStack.Outputs.DataSubnet2Id
+        RdsSecurityGroupId: !GetAtt SecurityStack.Outputs.RdsSecurityGroupId
+        RdsProxySecurityGroupId: !GetAtt SecurityStack.Outputs.RdsProxySecurityGroupId
+        DBInstanceClass: !Ref DBInstanceClass
+        DBName: !Ref DBName
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  CacheStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/cache.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        CacheSubnet1Id: !GetAtt NetworkStack.Outputs.CacheSubnet1Id
+        CacheSubnet2Id: !GetAtt NetworkStack.Outputs.CacheSubnet2Id
+        RedisSecurityGroupId: !GetAtt SecurityStack.Outputs.RedisSecurityGroupId
+        CacheNodeType: !Ref CacheNodeType
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  EcrStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/ecr.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  IamStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/iam.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        GitHubOidcProviderArn: !Ref GitHubOidcProviderArn
+        GitHubOrg: !Ref GitHubOrg
+        GitHubAppRepo: !Ref GitHubAppRepo
+        GitHubBranch: !Ref GitHubBranch
+        EcrRepositoryArn: !GetAtt EcrStack.Outputs.RepositoryArn
+        DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/compute.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnet1Id: !GetAtt NetworkStack.Outputs.PublicSubnet1Id
+        PublicSubnet2Id: !GetAtt NetworkStack.Outputs.PublicSubnet2Id
+        EcsSubnet1Id: !GetAtt NetworkStack.Outputs.EcsSubnet1Id
+        EcsSubnet2Id: !GetAtt NetworkStack.Outputs.EcsSubnet2Id
+        AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
+        EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
+        AppImageUri: !Ref AppImageUri
+        EcsTaskExecutionRoleArn: !GetAtt IamStack.Outputs.EcsTaskExecutionRoleArn
+        EcsTaskRoleArn: !GetAtt IamStack.Outputs.EcsTaskRoleArn
+        DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
+        RdsProxyEndpoint: !GetAtt DatabaseStack.Outputs.RdsProxyEndpoint
+        DBName: !GetAtt DatabaseStack.Outputs.DBName
+        RedisPrimaryEndpointAddress: !GetAtt CacheStack.Outputs.RedisPrimaryEndpointAddress
+        RedisPrimaryEndpointPort: !GetAtt CacheStack.Outputs.RedisPrimaryEndpointPort
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  AutoscalingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/autoscaling.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        ClusterName: !GetAtt ComputeStack.Outputs.ClusterName
+        ServiceName: !GetAtt ComputeStack.Outputs.ServiceName
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  CicdStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucketName}.s3.${AWS::Region}.amazonaws.com/stacks/cicd.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EcrRepositoryName: !GetAtt EcrStack.Outputs.RepositoryName
+        EcrRepositoryArn: !GetAtt EcrStack.Outputs.RepositoryArn
+        ClusterName: !GetAtt ComputeStack.Outputs.ClusterName
+        ServiceName: !GetAtt ComputeStack.Outputs.ServiceName
+        ProductionListenerArn: !GetAtt ComputeStack.Outputs.ProductionListenerArn
+        TestListenerArn: !GetAtt ComputeStack.Outputs.TestListenerArn
+        BlueTargetGroupName: !GetAtt ComputeStack.Outputs.BlueTargetGroupName
+        GreenTargetGroupName: !GetAtt ComputeStack.Outputs.GreenTargetGroupName
+        EcsTaskExecutionRoleArn: !GetAtt IamStack.Outputs.EcsTaskExecutionRoleArn
+        EcsTaskRoleArn: !GetAtt IamStack.Outputs.EcsTaskRoleArn
+        GitHubActionsRoleArn: !GetAtt IamStack.Outputs.GitHubActionsRoleArn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  AlbDnsName:
+    Description: Public ALB endpoint for the application
+    Value: !GetAtt ComputeStack.Outputs.AlbDnsName
+
+  EcrRepositoryUri:
+    Value: !GetAtt EcrStack.Outputs.RepositoryUri
+
+  GitHubActionsRoleArn:
+    Description: Role assumed by the app repo's GitHub Actions workflow
+    Value: !GetAtt IamStack.Outputs.GitHubActionsRoleArn
+
+  PipelineName:
+    Value: !GetAtt CicdStack.Outputs.PipelineName
+
+  ArtifactBucketName:
+    Value: !GetAtt CicdStack.Outputs.ArtifactBucketName
+
+  EcsClusterName:
+    Value: !GetAtt ComputeStack.Outputs.ClusterName
+
+  EcsServiceName:
+    Value: !GetAtt ComputeStack.Outputs.ServiceName
+
+  RdsProxyEndpoint:
+    Value: !GetAtt DatabaseStack.Outputs.RdsProxyEndpoint
+
+  RedisPrimaryEndpointAddress:
+    Value: !GetAtt CacheStack.Outputs.RedisPrimaryEndpointAddress

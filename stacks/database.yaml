@@ -1,74 +1,95 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  To-Do App - RDS PostgreSQL (Multi-AZ, db.t3) in dedicated data subnets,
-  fronted by RDS Proxy. Credentials generated into Secrets Manager.
+  To-Do App - RDS PostgreSQL instance (db.t3 family, Multi-AZ) in dedicated
+  private subnets, credentials generated into Secrets Manager, fronted by
+  RDS Proxy so the app only ever talks to the proxy endpoint.
 
 Parameters:
-  EnvironmentName:
+  ProjectName:
     Type: String
     Default: todo-app
+
+  DataSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+
+  DataSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
+  RdsProxySecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
   DBInstanceClass:
     Type: String
     Default: db.t3.micro
-  DBAllocatedStorage:
-    Type: Number
-    Default: 20
+
   DBName:
     Type: String
     Default: tododb
-  DBMasterUsername:
-    Type: String
-    Default: todoadmin
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
 
 Resources:
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: !Sub ${EnvironmentName} data tier subnet group (RDS + RDS Proxy)
+      DBSubnetGroupName: !Sub ${ProjectName}-db-subnet-group
+      DBSubnetGroupDescription: Private data subnets for the To-Do app RDS instance and RDS Proxy
       SubnetIds:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet1Id
-        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet2Id
+        - !Ref DataSubnet1Id
+        - !Ref DataSubnet2Id
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-data-subnet-group
+          Value: !Sub ${ProjectName}-db-subnet-group
+        - Key: Project
+          Value: !Ref ProjectName
 
   DBSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub ${EnvironmentName}/rds/credentials
-      Description: !Sub RDS PostgreSQL master credentials for ${EnvironmentName}
+      Name: !Sub ${ProjectName}/db-credentials
+      Description: Master credentials for the To-Do app RDS instance
       GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username":"${DBMasterUsername}"}'
+        SecretStringTemplate: '{"username":"todoapp_admin"}'
         GenerateStringKey: password
-        PasswordLength: 24
+        PasswordLength: 32
         ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
 
   DBInstance:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      DBInstanceIdentifier: !Sub ${EnvironmentName}-postgres
+      DBInstanceIdentifier: !Sub ${ProjectName}-db
       Engine: postgres
       DBInstanceClass: !Ref DBInstanceClass
+      DBName: !Ref DBName
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
       StorageEncrypted: true
       MultiAZ: true
-      DBName: !Ref DBName
-      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
-      DBSubnetGroupName: !Ref DBSubnetGroup
-      VPCSecurityGroups:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-RdsSecurityGroupId
+      PubliclyAccessible: false
       BackupRetentionPeriod: 7
       DeletionProtection: false
-      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroupId
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-postgres
+          Value: !Sub ${ProjectName}-db
+        - Key: Project
+          Value: !Ref ProjectName
 
-  DBSecretAttachment:
+  DBSecretTargetAttachment:
     Type: AWS::SecretsManager::SecretTargetAttachment
     Properties:
       SecretId: !Ref DBSecret
@@ -78,7 +99,7 @@ Resources:
   RdsProxyRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${EnvironmentName}-rds-proxy-role
+      RoleName: !Sub ${ProjectName}-rds-proxy
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -87,26 +108,28 @@ Resources:
               Service: rds.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: rds-proxy-secret-access
+        - PolicyName: ReadDbSecret
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
+                Action: secretsmanager:GetSecretValue
                 Resource: !Ref DBSecret
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
 
   RdsProxy:
     Type: AWS::RDS::DBProxy
     Properties:
-      DBProxyName: !Sub ${EnvironmentName}-proxy
+      DBProxyName: !Sub ${ProjectName}-proxy
       EngineFamily: POSTGRESQL
       RoleArn: !GetAtt RdsProxyRole.Arn
       VpcSubnetIds:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet1Id
-        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet2Id
+        - !Ref DataSubnet1Id
+        - !Ref DataSubnet2Id
       VpcSecurityGroupIds:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-RdsProxySecurityGroupId
+        - !Ref RdsProxySecurityGroupId
       RequireTLS: true
       Auth:
         - AuthScheme: SECRETS
@@ -127,17 +150,12 @@ Resources:
 Outputs:
   DBSecretArn:
     Value: !Ref DBSecret
-    Export:
-      Name: !Sub ${EnvironmentName}-DBSecretArn
-  DBInstanceEndpoint:
+
+  DBInstanceEndpointAddress:
     Value: !GetAtt DBInstance.Endpoint.Address
-    Export:
-      Name: !Sub ${EnvironmentName}-DBInstanceEndpoint
+
   RdsProxyEndpoint:
     Value: !GetAtt RdsProxy.Endpoint
-    Export:
-      Name: !Sub ${EnvironmentName}-RdsProxyEndpoint
+
   DBName:
     Value: !Ref DBName
-    Export:
-      Name: !Sub ${EnvironmentName}-DBName

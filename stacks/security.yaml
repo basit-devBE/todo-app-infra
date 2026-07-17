@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - Security groups for the ALB, ECS tasks, RDS Proxy, RDS, and
+  ElastiCache Redis, following least-privilege (each tier only accepts
+  traffic from the tier in front of it).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  AppContainerPort:
+    Type: Number
+    Default: 8080
+
+  TestListenerPort:
+    Type: Number
+    Default: 8081
+
+Resources:
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ALB - accepts HTTP from the internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Production traffic
+        - IpProtocol: tcp
+          FromPort: !Ref TestListenerPort
+          ToPort: !Ref TestListenerPort
+          CidrIp: 0.0.0.0/0
+          Description: CodeDeploy blue/green test listener
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-alb-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - accepts app traffic from the ALB only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AppContainerPort
+          ToPort: !Ref AppContainerPort
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: App port from ALB (prod listener)
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ecs-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  RdsProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS Proxy - accepts traffic from ECS tasks only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsSecurityGroup
+          Description: PostgreSQL from ECS tasks
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds-proxy-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - accepts traffic from RDS Proxy only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref RdsProxySecurityGroup
+          Description: PostgreSQL from RDS Proxy
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ElastiCache Redis - accepts traffic from ECS tasks only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref EcsSecurityGroup
+          Description: Redis from ECS tasks
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-redis-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+
+  EcsSecurityGroupId:
+    Value: !Ref EcsSecurityGroup
+
+  RdsProxySecurityGroupId:
+    Value: !Ref RdsProxySecurityGroup
+
+  RdsSecurityGroupId:
+    Value: !Ref RdsSecurityGroup
+
+  RedisSecurityGroupId:
+    Value: !Ref RedisSecurityGroup

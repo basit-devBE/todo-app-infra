@@ -4,9 +4,19 @@ Description: >
   dedicated cache subnets, used as a read-through cache in front of RDS.
 
 Parameters:
-  EnvironmentName:
+  ProjectName:
     Type: String
     Default: todo-app
+
+  CacheSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+
+  CacheSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+
+  RedisSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
   CacheNodeType:
     Type: String
     Default: cache.t3.micro
@@ -15,16 +25,16 @@ Resources:
   CacheSubnetGroup:
     Type: AWS::ElastiCache::SubnetGroup
     Properties:
-      Description: !Sub ${EnvironmentName} cache tier subnet group
+      Description: Private cache subnets for the To-Do app Redis replication group
       SubnetIds:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-CacheSubnet1Id
-        - Fn::ImportValue: !Sub ${EnvironmentName}-CacheSubnet2Id
+        - !Ref CacheSubnet1Id
+        - !Ref CacheSubnet2Id
 
   RedisReplicationGroup:
     Type: AWS::ElastiCache::ReplicationGroup
     Properties:
-      ReplicationGroupId: !Sub ${EnvironmentName}-redis
-      ReplicationGroupDescription: !Sub ${EnvironmentName} read-cache for To-Do app
+      ReplicationGroupId: !Sub ${ProjectName}-redis
+      ReplicationGroupDescription: !Sub ${ProjectName} read-cache for the To-Do app
       Engine: redis
       CacheNodeType: !Ref CacheNodeType
       NumCacheClusters: 2
@@ -32,19 +42,18 @@ Resources:
       MultiAZEnabled: true
       CacheSubnetGroupName: !Ref CacheSubnetGroup
       SecurityGroupIds:
-        - Fn::ImportValue: !Sub ${EnvironmentName}-RedisSecurityGroupId
+        - !Ref RedisSecurityGroupId
       AtRestEncryptionEnabled: true
       TransitEncryptionEnabled: true
       Tags:
         - Key: Name
-          Value: !Sub ${EnvironmentName}-redis
+          Value: !Sub ${ProjectName}-redis
+        - Key: Project
+          Value: !Ref ProjectName
 
 Outputs:
   RedisPrimaryEndpointAddress:
     Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
-    Export:
-      Name: !Sub ${EnvironmentName}-RedisPrimaryEndpointAddress
+
   RedisPrimaryEndpointPort:
     Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
-    Export:
-      Name: !Sub ${EnvironmentName}-RedisPrimaryEndpointPort

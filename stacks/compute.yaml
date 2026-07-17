@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - ECS Fargate cluster, task definition (RDS Proxy + Redis
+  wired in), CodeDeploy-controlled service, and a public ALB with a
+  blue/green target group pair plus a test listener for deployment
+  validation.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: todo-app
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PublicSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+
+  PublicSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+
+  EcsSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+
+  EcsSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+
+  AlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
+  EcsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+
+  AppContainerPort:
+    Type: Number
+    Default: 8080
+
+  TestListenerPort:
+    Type: Number
+    Default: 8081
+
+  ContainerCpu:
+    Type: String
+    Default: '512'
+
+  ContainerMemory:
+    Type: String
+    Default: '1024'
+
+  AppImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI (repo:tag) to seed the task definition with. A
+      valid, already-pushed image is required here since the ECS service
+      must reach a healthy steady state during stack creation.
+
+  EcsTaskExecutionRoleArn:
+    Type: String
+
+  EcsTaskRoleArn:
+    Type: String
+
+  DBSecretArn:
+    Type: String
+
+  RdsProxyEndpoint:
+    Type: String
+
+  DBName:
+    Type: String
+
+  RedisPrimaryEndpointAddress:
+    Type: String
+
+  RedisPrimaryEndpointPort:
+    Type: String
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ProjectName}-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ProjectName}
+      RetentionInDays: 30
+
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroupId
+      Subnets:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  BlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-tg-blue
+      VpcId: !Ref VpcId
+      Port: !Ref AppContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /actuator/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-tg-green
+      VpcId: !Ref VpcId
+      Port: !Ref AppContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /actuator/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  ProductionListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
+
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: !Ref TestListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref GreenTargetGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ProjectName}-task
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      ExecutionRoleArn: !Ref EcsTaskExecutionRoleArn
+      TaskRoleArn: !Ref EcsTaskRoleArn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref AppImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AppContainerPort
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AppLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: app
+          Environment:
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub jdbc:postgresql://${RdsProxyEndpoint}:5432/${DBName}
+            - Name: REDIS_HOST
+              Value: !Ref RedisPrimaryEndpointAddress
+            - Name: REDIS_PORT
+              Value: !Ref RedisPrimaryEndpointPort
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub '${DBSecretArn}:username::'
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub '${DBSecretArn}:password::'
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ProductionListener
+      - TestListener
+    Properties:
+      ServiceName: !Sub ${ProjectName}-service
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      DeploymentController:
+        Type: CODE_DEPLOY
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref EcsSubnet1Id
+            - !Ref EcsSubnet2Id
+          SecurityGroups:
+            - !Ref EcsSecurityGroupId
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: !Ref AppContainerPort
+          TargetGroupArn: !Ref BlueTargetGroup
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+
+  ServiceName:
+    Value: !GetAtt Service.Name
+
+  TaskDefinitionFamily:
+    Value: !Sub ${ProjectName}-task
+
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
+
+  ProductionListenerArn:
+    Value: !Ref ProductionListener
+
+  TestListenerArn:
+    Value: !Ref TestListener
+
+  BlueTargetGroupName:
+    Value: !GetAtt BlueTargetGroup.TargetGroupName
+
+  GreenTargetGroupName:
+    Value: !GetAtt GreenTargetGroup.TargetGroupName

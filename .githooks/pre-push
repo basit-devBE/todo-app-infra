@@ -1,0 +1,14 @@
+#!/bin/bash
+# Syncs stacks/ to the templates S3 bucket before every push, so the
+# nested-stack TemplateURLs in root-stack.yaml always resolve to the
+# version of each child template being pushed. GitSync only manages
+# root-stack.yaml itself - it has no idea these child files exist.
+set -euo pipefail
+
+BUCKET="todo-app-infra-templates-eu-central-1-124355645722"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "==> Syncing $REPO_ROOT/stacks to s3://$BUCKET/stacks"
+aws s3 sync "$REPO_ROOT/stacks" "s3://$BUCKET/stacks" --delete
+
+echo "==> Template sync complete"

@@ -7,78 +7,87 @@ the GitHub OIDC trust used by the [app repo](../todo-app-code)'s GitHub Actions 
 No NAT Gateway is used — private subnets reach ECR, CloudWatch Logs, Secrets Manager, and S3
 purely through VPC endpoints, which is both cheaper and keeps ECS tasks fully private.
 
-## Stack layout
+Deployed via **CloudFormation Git sync**, not a CLI script — GitSync only tracks one root
+template per stack, so this repo uses the standard nested-stack pattern: `root-stack.yaml` at
+the repo root composes nine child stacks in `stacks/`, each nested stack's `TemplateURL`
+pointing at an S3 bucket that mirrors this repo's `stacks/` folder.
 
-| # | Stack | Template | Depends on |
-|---|-------|----------|------------|
-| 1 | `<env>-network`     | `templates/01-network.yaml`        | — |
-| 2 | `<env>-security`    | `templates/02-security-groups.yaml`| network |
-| 3 | `<env>-endpoints`   | `templates/03-vpc-endpoints.yaml`  | network, security |
-| 4 | `<env>-data`        | `templates/04-data.yaml`           | network, security |
-| 5 | `<env>-cache`       | `templates/05-cache.yaml`          | network, security |
-| 6 | `<env>-compute`     | `templates/06-compute.yaml`        | network, security, data, cache |
-| 7 | `<env>-pipeline`    | `templates/07-pipeline.yaml`       | compute |
-| 8 | `<env>-github-oidc` | `templates/08-github-oidc.yaml`    | compute, pipeline |
+## Layout
 
-Stacks are linked with `Export`/`Fn::ImportValue`, not nested-stack `TemplateURL`s, so each
-one can be mapped as its own stack in **CloudFormation GitSync** without an S3 packaging step.
+| Path | Purpose |
+|---|---|
+| `root-stack.yaml` | The template GitSync actually tracks — wires all child stacks together |
+| `deployment-file.yaml` | GitSync's stack deployment file: parameters, capabilities, tags for `root-stack.yaml` |
+| `stacks/network.yaml` | VPC, public subnets (ALB), three private subnet tiers (ECS / data / cache), VPC endpoints |
+| `stacks/security.yaml` | Six security groups, chained ALB → ECS → RDS Proxy → RDS, and ECS → Redis |
+| `stacks/database.yaml` | RDS PostgreSQL (`db.t3`, Multi-AZ), Secrets Manager credentials, RDS Proxy |
+| `stacks/cache.yaml` | ElastiCache Redis replication group (primary + replica) |
+| `stacks/ecr.yaml` | ECR repository for the app image |
+| `stacks/iam.yaml` | GitHub Actions role (existing OIDC provider), ECS execution/task roles |
+| `stacks/compute.yaml` | ECS cluster, ALB (prod + test listener), blue/green target groups, task definition, service |
+| `stacks/autoscaling.yaml` | Application Auto Scaling: min 1 / desired 1 / max 4, CPU target tracking |
+| `stacks/cicd.yaml` | Artifact bucket, CodeDeploy blue/green, CodePipeline (ECR + S3 sources), EventBridge trigger |
+| `.githooks/pre-push` | Syncs `stacks/` to S3 before every push (see below) |
 
-## First-time bootstrap (manual, before handing off to GitSync)
+## Why child templates need a separate sync step
+
+GitSync watches `root-stack.yaml` for changes and re-deploys the stack when it changes — but
+`root-stack.yaml`'s nested stacks reference their children via S3 `TemplateURL`s, not local
+paths, and GitSync has no idea the `stacks/` folder exists. A **git pre-push hook**
+(`.githooks/pre-push`) syncs `stacks/` to an S3 bucket every time you push, so the
+`TemplateURL`s always resolve to the version of each child template you just pushed.
+
+Run once after cloning:
 
 ```bash
-export GITHUB_ORG=<your-github-org-or-username>
-export GITHUB_REPO=todo-app-code   # default
-export AWS_REGION=us-east-1        # your region
-./scripts/deploy.sh
+./setup.sh   # git config core.hooksPath .githooks
 ```
 
-This deploys stacks 1–8 in order. The ECS task definition initially runs a public placeholder
-image (`httpd`) so the compute stack has something valid to launch — the real app image
-replaces it the first time the GitHub Actions workflow in `todo-app-code` runs.
+This requires your own AWS CLI credentials locally (not OIDC — it's a local git hook, not a
+CI/CD workflow) with `s3:PutObject`/`s3:DeleteObject` on the templates bucket.
+
+## One-time prerequisites (outside CloudFormation)
+
+These exist before `root-stack.yaml` can be created, since the stack's own creation depends on
+them:
+
+1. **S3 templates bucket** — `todo-app-infra-templates-eu-central-1-124355645722`. Create it
+   and run `./setup.sh`, then push once to populate `stacks/` via the pre-push hook.
+2. **A real placeholder image in ECR** for the initial task definition (`AppImageUri` in
+   `deployment-file.yaml`) — the ECS service must reach a healthy steady state during stack
+   creation, before the app repo's pipeline has ever run. This reuses the shared bootstrap
+   image already in this account (`ecs-lab-bootstrap:latest`); point it at any image that
+   answers `200` on `/actuator/health` on port 8080 if that repo isn't available.
+3. **GitHub OIDC provider** — this account already has one
+   (`arn:aws:iam::124355645722:oidc-provider/token.actions.githubusercontent.com`), reused via
+   the `GitHubOidcProviderArn` parameter rather than created fresh (an account can only have one
+   OIDC provider per URL).
+
+## Deploying via CloudFormation Git sync
+
+In the CloudFormation console: **Git sync** → connect this repo via CodeConnections → create a
+stack with **Sync from Git**, template path `root-stack.yaml`, and either point it at
+`deployment-file.yaml` or let the console generate one from the same parameters. GitSync opens
+a pull request for the initial stack creation and for every subsequent template change — merge
+it to apply.
 
 **Costs money as soon as it's applied**: RDS (Multi-AZ `db.t3.micro`), RDS Proxy, ElastiCache
-(2 nodes), the ALB, 4 VPC interface endpoints, and CodePipeline all bill hourly. Tear down with
-`aws cloudformation delete-stack` in reverse order when done.
+(2 nodes), the ALB, 4 VPC interface endpoints, and CodePipeline all bill hourly.
 
-## Wiring up the app repo after bootstrap
+## Wiring up the app repo
 
-The `todo-app-code` GitHub Actions workflow needs these **Repository variables** (Settings →
-Secrets and variables → Actions → Variables), copied from this stack's outputs:
-
-| GitHub variable | Source |
-|---|---|
-| `AWS_REGION` | the region you deployed to |
-| `AWS_DEPLOY_ROLE_ARN` | `<env>-github-oidc` stack output `GitHubActionsDeployRoleArn` |
-| `ECR_REPOSITORY` | `<env>-compute` stack output `EcrRepositoryName` |
-| `ARTIFACT_BUCKET` | `<env>-pipeline` stack output `ArtifactBucketName` |
-| `ECS_EXECUTION_ROLE_ARN` | `<env>-compute` stack output `TaskExecutionRoleArn` |
-| `ECS_TASK_ROLE_ARN` | `<env>-compute` stack output `TaskRoleArn` |
-| `RDS_PROXY_ENDPOINT` | `<env>-data` stack output `RdsProxyEndpoint` |
-| `DB_NAME` | `<env>-data` stack output `DBName` |
-| `DB_SECRET_ARN` | `<env>-data` stack output `DBSecretArn` |
-| `REDIS_HOST` | `<env>-cache` stack output `RedisPrimaryEndpointAddress` |
-| `REDIS_PORT` | `<env>-cache` stack output `RedisPrimaryEndpointPort` |
-| `LOG_GROUP` | `/ecs/<env>` (e.g. `/ecs/todo-app`) |
-
-Once those are set, a push to `main` in `todo-app-code` builds the image, pushes it to ECR,
-uploads the blue/green deploy bundle to S3, and the ECR push itself fires the EventBridge
-rule that starts CodePipeline → CodeDeploy.
-
-## Handing off to CloudFormation GitSync
-
-After the manual bootstrap above succeeds once (so all cross-stack exports exist), connect
-this repo in the CloudFormation console (**Git sync** → connect via CodeConnections to GitHub)
-and create one sync configuration per stack, each pointing at its template file and using the
-same stack name you bootstrapped with. From then on, template changes pushed to this repo
-apply automatically — deploy order still matters on first sync, so sync `network` →
-`security` → `endpoints` → `data`/`cache` → `compute` → `pipeline` → `github-oidc`.
+The `todo-app-code` GitHub Actions workflow assumes `todo-app-github-actions` directly (see
+`stacks/iam.yaml`) — no GitHub repo variables to copy over. It re-derives the task definition
+live via `aws ecs describe-task-definition` on every deploy (only patching the image field), so
+the RDS Proxy endpoint, DB secret ARN, and Redis host/port baked in by `stacks/compute.yaml`
+never need to be duplicated into the app repo.
 
 ## Tagging
 
-`scripts/deploy.sh` passes `--tags Project=<env> Environment=<deploy_env> ManagedBy=CloudFormation`
-on every `aws cloudformation deploy` call. CloudFormation propagates stack-level tags to every
-resource in the stack that supports tagging, so this covers the whole stack without per-resource
-`Tags:` blocks. Reproduce the same `--tags` when configuring each CloudFormation GitSync stack.
+`deployment-file.yaml` sets `tags: {Project: todo-app, ManagedBy: CloudFormation-GitSync}` at
+the stack level — CloudFormation propagates these to every resource in the stack that supports
+tagging, so this covers the whole stack without per-resource `Tags:` blocks (most resources
+also carry an explicit `Project` tag for clarity).
 
 ## Architecture diagram
 
