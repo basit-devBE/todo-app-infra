@@ -47,7 +47,10 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubAppRepo}:ref:refs/heads/${GitHubBranch}
+                # GitHub embeds immutable numeric org/repo IDs in the sub claim
+                # (repo:org@orgId/repo@repoId:ref:...) as well as the classic
+                # name-only form - the wildcards tolerate either.
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}*/${GitHubAppRepo}*:ref:refs/heads/${GitHubBranch}
       Policies:
         - PolicyName: EcrPush
           PolicyDocument:
