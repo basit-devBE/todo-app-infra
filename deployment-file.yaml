@@ -9,12 +9,13 @@ parameters:
   # Bootstraps the first ECS service deploy (serves 200 on /actuator/health)
   # until the real pipeline pushes the actual app image via blue/green.
   # Reuses the shared bootstrap image from the ecscicd lab in this account.
+  #Region: eu-central-1
   AppImageUri: 124355645722.dkr.ecr.eu-central-1.amazonaws.com/ecs-lab-bootstrap:latest
   DBInstanceClass: db.t3.micro
   DBName: tododb
 capabilities:
-  - CAPABILITY_NAMED_IAM
-  - CAPABILITY_AUTO_EXPAND
+- CAPABILITY_NAMED_IAM
+- CAPABILITY_AUTO_EXPAND
 tags:
   Project: todo-app
   ManagedBy: CloudFormation-GitSync
