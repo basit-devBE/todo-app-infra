@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - VPC endpoints so ECS tasks (no NAT, no public IP) can reach
+  ECR, CloudWatch Logs, Secrets Manager, and S3 (image layers) privately.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: todo-app
+
+Resources:
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PrivateRouteTableId
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet2Id
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-VpcEndpointSecurityGroupId
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet2Id
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-VpcEndpointSecurityGroupId
+
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet2Id
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-VpcEndpointSecurityGroupId
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-EcsSubnet2Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet2Id
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-VpcEndpointSecurityGroupId

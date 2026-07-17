@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - ElastiCache Redis replication group (primary + replica) in
+  dedicated cache subnets, used as a read-through cache in front of RDS.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: todo-app
+  CacheNodeType:
+    Type: String
+    Default: cache.t3.micro
+
+Resources:
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub ${EnvironmentName} cache tier subnet group
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-CacheSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-CacheSubnet2Id
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub ${EnvironmentName}-redis
+      ReplicationGroupDescription: !Sub ${EnvironmentName} read-cache for To-Do app
+      Engine: redis
+      CacheNodeType: !Ref CacheNodeType
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-RedisSecurityGroupId
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-redis
+
+Outputs:
+  RedisPrimaryEndpointAddress:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-RedisPrimaryEndpointAddress
+  RedisPrimaryEndpointPort:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub ${EnvironmentName}-RedisPrimaryEndpointPort

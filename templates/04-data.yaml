@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  To-Do App - RDS PostgreSQL (Multi-AZ, db.t3) in dedicated data subnets,
+  fronted by RDS Proxy. Credentials generated into Secrets Manager.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: todo-app
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+  DBName:
+    Type: String
+    Default: tododb
+  DBMasterUsername:
+    Type: String
+    Default: todoadmin
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${EnvironmentName} data tier subnet group (RDS + RDS Proxy)
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-data-subnet-group
+
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${EnvironmentName}/rds/credentials
+      Description: !Sub RDS PostgreSQL master credentials for ${EnvironmentName}
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DBMasterUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\'
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-postgres
+      Engine: postgres
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: true
+      DBName: !Ref DBName
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-RdsSecurityGroupId
+      BackupRetentionPeriod: 7
+      DeletionProtection: false
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-postgres
+
+  DBSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DBSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+  RdsProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-rds-proxy-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: rds-proxy-secret-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DBSecret
+
+  RdsProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: !Sub ${EnvironmentName}-proxy
+      EngineFamily: POSTGRESQL
+      RoleArn: !GetAtt RdsProxyRole.Arn
+      VpcSubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet1Id
+        - Fn::ImportValue: !Sub ${EnvironmentName}-DataSubnet2Id
+      VpcSecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-RdsProxySecurityGroupId
+      RequireTLS: true
+      Auth:
+        - AuthScheme: SECRETS
+          SecretArn: !Ref DBSecret
+          IAMAuth: DISABLED
+
+  RdsProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Properties:
+      DBProxyName: !Ref RdsProxy
+      TargetGroupName: default
+      DBInstanceIdentifiers:
+        - !Ref DBInstance
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: 100
+        MaxIdleConnectionsPercent: 50
+
+Outputs:
+  DBSecretArn:
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub ${EnvironmentName}-DBSecretArn
+  DBInstanceEndpoint:
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-DBInstanceEndpoint
+  RdsProxyEndpoint:
+    Value: !GetAtt RdsProxy.Endpoint
+    Export:
+      Name: !Sub ${EnvironmentName}-RdsProxyEndpoint
+  DBName:
+    Value: !Ref DBName
+    Export:
+      Name: !Sub ${EnvironmentName}-DBName
