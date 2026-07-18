@@ -47,6 +47,19 @@ Parameters:
     Type: String
     Default: '1024'
 
+  InitialTaskDefinitionRevision:
+    Type: Number
+    Description: >
+      ECS task definition revision numbers are permanent and monotonically
+      increasing per family - they are never reused, even after
+      deregistration or a full stack teardown. Set this to whatever
+      revision will actually be registered first for this deploy (check
+      with `aws ecs list-task-definitions --family-prefix <ProjectName>-task
+      --status ACTIVE` before creating the stack) and never change it
+      afterward - the Service pins to this fixed revision permanently so
+      CloudFormation never tries to push a TaskDefinition update to a
+      CODE_DEPLOY-controlled service, which ECS always rejects.
+
   AppImageUri:
     Type: String
     Description: >
@@ -209,10 +222,20 @@ Resources:
     DependsOn:
       - ProductionListener
       - TestListener
+      # No longer implicit via !Ref now that TaskDefinition is pinned to a
+      # literal "family:1" string below - must still be created first.
+      - TaskDefinition
     Properties:
       ServiceName: !Sub ${ProjectName}-service
       Cluster: !Ref Cluster
-      TaskDefinition: !Ref TaskDefinition
+      # Pinned to revision 1 deliberately, not !Ref TaskDefinition. ECS
+      # rejects any UpdateService call that changes TaskDefinition once a
+      # service has a CODE_DEPLOY controller - CloudFormation would try to
+      # push forward every time this template registers a new revision
+      # (e.g. an env var change), and that update would always fail. All
+      # deployments past the first happen through CodeDeploy, which reads
+      # the live task definition independent of what's declared here.
+      TaskDefinition: !Sub '${ProjectName}-task:${InitialTaskDefinitionRevision}'
       DesiredCount: 1
       LaunchType: FARGATE
       DeploymentController:

@@ -13,6 +13,13 @@ parameters:
   AppImageUri: 124355645722.dkr.ecr.eu-central-1.amazonaws.com/ecs-lab-bootstrap:latest
   DBInstanceClass: db.t3.micro
   DBName: tododb
+  # ECS task definition revisions are permanent per family and never reset,
+  # even after a full stack teardown - the todo-app-task family already has
+  # history from the prior attempt (revisions 1-4), so the next fresh
+  # registration will be revision 5, not 1. Verify with
+  # `aws ecs list-task-definitions --family-prefix todo-app-task --status ACTIVE`
+  # before creating the stack, and never change this value afterward.
+  InitialTaskDefinitionRevision: 5
 capabilities:
 - CAPABILITY_NAMED_IAM
 - CAPABILITY_AUTO_EXPAND

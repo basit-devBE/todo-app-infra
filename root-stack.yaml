@@ -35,6 +35,12 @@ Parameters:
       Full ECR image URI (repo:tag) used to seed the ECS task definition.
       Must already exist in ECR before this stack is created/updated.
 
+  InitialTaskDefinitionRevision:
+    Type: Number
+    Description: >
+      Fixed forever at whatever revision the first todo-app-task
+      registration produces - see stacks/compute.yaml for why.
+
   DBInstanceClass:
     Type: String
     Default: db.t3.micro
@@ -139,6 +145,7 @@ Resources:
         AlbSecurityGroupId: !GetAtt SecurityStack.Outputs.AlbSecurityGroupId
         EcsSecurityGroupId: !GetAtt SecurityStack.Outputs.EcsSecurityGroupId
         AppImageUri: !Ref AppImageUri
+        InitialTaskDefinitionRevision: !Ref InitialTaskDefinitionRevision
         EcsTaskExecutionRoleArn: !GetAtt IamStack.Outputs.EcsTaskExecutionRoleArn
         EcsTaskRoleArn: !GetAtt IamStack.Outputs.EcsTaskRoleArn
         DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
