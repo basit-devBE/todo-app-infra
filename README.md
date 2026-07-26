@@ -61,11 +61,6 @@ them:
    including RDS Proxy and ElastiCache actions, which this account's other GitSync roles
    (`Synccloudformation`, `photouploader-cfn-deployment`) don't have. Select **Existing IAM
    role** in the console's Git sync stack-creation step and pick this one.
-3. **A real placeholder image in ECR** for the initial task definition (`AppImageUri` in
-   `deployment-file.yaml`) — the ECS service must reach a healthy steady state during stack
-   creation, before the app repo's pipeline has ever run. This reuses the shared bootstrap
-   image already in this account (`ecs-lab-bootstrap:latest`); point it at any image that
-   answers `200` on `/actuator/health` on port 8080 if that repo isn't available.
 3. **GitHub OIDC provider** — this account already has one
    (`arn:aws:iam::124355645722:oidc-provider/token.actions.githubusercontent.com`), reused via
    the `GitHubOidcProviderArn` parameter rather than created fresh (an account can only have one
@@ -81,6 +76,34 @@ it to apply.
 
 **Costs money as soon as it's applied**: RDS (Multi-AZ `db.t3.micro`), RDS Proxy, ElastiCache
 (2 nodes), the ALB, 4 VPC interface endpoints, and CodePipeline all bill hourly.
+
+### Two-phase bootstrap (no placeholder image needed)
+
+The ECS service needs a real image already sitting in the `todo-app` ECR repo to reach a
+healthy steady state — which can't exist on a repo this same deploy is creating. Rather than
+depending on a placeholder image from another project, `root-stack.yaml`'s `DeployCompute`
+parameter gates `ComputeStack`/`AutoscalingStack`/`CicdStack` behind a `Condition`:
+
+1. **Phase 1** — `DeployCompute: 'false'` (the checked-in default). Deploys
+   network/security/database/cache/ecr/iam only. This creates a real, empty `todo-app` ECR
+   repo and nothing ECS-related at all.
+2. Build and push a real app image, tagged `:latest`, straight to that now-existing repo —
+   manually (`docker build`/`docker push` with your own AWS CLI credentials), since the
+   pipeline and its GitHub repo variables don't exist until Phase 2 creates them.
+3. **Phase 2** — flip `DeployCompute` to `'true'` in `deployment-file.yaml` and push. GitSync
+   creates `ComputeStack`/`AutoscalingStack`/`CicdStack` in one clean `CREATE` —
+   `stacks/compute.yaml`'s `AppImageUri` is computed automatically as
+   `${EcrStack.Outputs.RepositoryUri}:latest`, so nothing else needs setting.
+4. From then on, pushes to `todo-app-code`'s `main` build and deploy normally through
+   CodeDeploy blue/green - `build-and-deploy.yml` already hardcodes the deterministic
+   resource names this convention produces (`todo-app-task`, `todo-app-cicd-artifacts-<account>`,
+   the `todo-app-github-actions` role), so nothing needs copying from stack outputs once
+   Phase 2 has completed. `DeployCompute` never needs flipping back to `false`.
+
+Before flipping `DeployCompute` to `true` on a fresh stack, double check
+`InitialTaskDefinitionRevision` in `deployment-file.yaml` is still correct — see the comment
+next to it, and [the `aws-lab` skill](~/.claude/skills/aws-lab/REFERENCE.md) for why ECS task
+definition revision numbers never reset.
 
 ## Wiring up the app repo
 

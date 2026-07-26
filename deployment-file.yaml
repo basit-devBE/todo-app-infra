@@ -6,20 +6,26 @@ parameters:
   GitHubOrg: basit-devBE
   GitHubAppRepo: todo-app-code
   GitHubBranch: main
-  # Bootstraps the first ECS service deploy (serves 200 on /actuator/health)
-  # until the real pipeline pushes the actual app image via blue/green.
-  # Reuses the shared bootstrap image from the ecscicd lab in this account.
-  #Region: eu-central-1
-  AppImageUri: 124355645722.dkr.ecr.eu-central-1.amazonaws.com/ecs-lab-bootstrap:latest
   DBInstanceClass: db.t3.micro
   DBName: tododb
+  # Phase 1 (this state): deploys network/security/database/cache/ecr/iam
+  # only, creating the (empty) todo-app ECR repo.
+  #
+  # Phase 2: once a real app image has been built and pushed, tagged
+  # :latest, to that repo (manually - the CI/CD pipeline doesn't exist
+  # until this stack creates it), set DeployCompute to 'true' and push
+  # again to add compute/autoscaling/cicd. The image URI is computed
+  # automatically from the ECR repo's own URI + ":latest" - nothing else
+  # to set. From then on CodeDeploy manages the running image.
+  DeployCompute: 'false'
   # ECS task definition revisions are permanent per family and never reset,
   # even after a full stack teardown - the todo-app-task family already has
-  # history from the prior attempt (revisions 1-4), so the next fresh
-  # registration will be revision 5, not 1. Verify with
+  # history from prior attempts (revisions 1-6 all exist), so the next
+  # fresh registration will be revision 7, not 1. Verify with
   # `aws ecs list-task-definitions --family-prefix todo-app-task --status ACTIVE`
-  # before creating the stack, and never change this value afterward.
-  InitialTaskDefinitionRevision: 5
+  # before flipping DeployCompute to true, and never change this value
+  # afterward.
+  InitialTaskDefinitionRevision: 7
 capabilities:
 - CAPABILITY_NAMED_IAM
 - CAPABILITY_AUTO_EXPAND
