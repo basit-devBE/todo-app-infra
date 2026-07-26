@@ -1,8 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  To-Do App - root stack wiring all nested child stacks together: network,
-  security, database (RDS + RDS Proxy), cache (ElastiCache Redis), ECR,
-  IAM, compute (ECS/ALB), autoscaling, and the CI/CD pipeline.
+  To-Do App - root stack wiring all nested child stacks together: network, security, database (RDS + RDS Proxy), cache (ElastiCache Redis), ECR, IAM, compute (ECS/ALB), autoscaling, and the CI/CD pipeline.
 
 Parameters:
   ProjectName:
@@ -31,24 +29,15 @@ Parameters:
 
   DeployCompute:
     Type: String
-    Default: 'false'
-    AllowedValues: ['true', 'false']
+    Default: 'true'
+    AllowedValues: [ 'true', 'false' ]
     Description: >
-      Two-phase bootstrap switch. The ECS service needs a real image already
-      sitting in the (this same stack's) ECR repo to reach a healthy steady
-      state - which can't exist on a repo this same deploy is creating. Phase
-      1: leave this false, deploy network/security/database/cache/ecr/iam
-      only, then manually build+push the app image, tagged :latest, to the
-      now-existing ECR repo. Phase 2: set this true and push again to add
-      compute/autoscaling/cicd - the image URI is computed automatically as
-      "<repo-uri>:latest", so nothing else needs updating. Once real deploys
-      happen through the pipeline, CodeDeploy manages the running image.
+      Two-phase bootstrap switch. The ECS service needs a real image already sitting in the (this same stack's) ECR repo to reach a healthy steady state - which can't exist on a repo this same deploy is creating. Phase 1: leave this false, deploy network/security/database/cache/ecr/iam only, then manually build+push the app image, tagged :latest, to the now-existing ECR repo. Phase 2: set this true and push again to add compute/autoscaling/cicd - the image URI is computed automatically as "<repo-uri>:latest", so nothing else needs updating. Once real deploys happen through the pipeline, CodeDeploy manages the running image.
 
   InitialTaskDefinitionRevision:
     Type: Number
     Description: >
-      Fixed forever at whatever revision the first todo-app-task
-      registration produces - see stacks/compute.yaml for why.
+      Fixed forever at whatever revision the first todo-app-task registration produces - see stacks/compute.yaml for why.
 
   DBInstanceClass:
     Type: String
@@ -63,7 +52,7 @@ Parameters:
     Default: cache.t3.micro
 
 Conditions:
-  ShouldDeployCompute: !Equals [!Ref DeployCompute, 'true']
+  ShouldDeployCompute: !Equals [ !Ref DeployCompute, 'true' ]
 
 Resources:
   NetworkStack:
@@ -73,8 +62,8 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   SecurityStack:
     Type: AWS::CloudFormation::Stack
@@ -84,8 +73,8 @@ Resources:
         ProjectName: !Ref ProjectName
         VpcId: !GetAtt NetworkStack.Outputs.VpcId
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   DatabaseStack:
     Type: AWS::CloudFormation::Stack
@@ -100,8 +89,8 @@ Resources:
         DBInstanceClass: !Ref DBInstanceClass
         DBName: !Ref DBName
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   CacheStack:
     Type: AWS::CloudFormation::Stack
@@ -114,8 +103,8 @@ Resources:
         RedisSecurityGroupId: !GetAtt SecurityStack.Outputs.RedisSecurityGroupId
         CacheNodeType: !Ref CacheNodeType
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   EcrStack:
     Type: AWS::CloudFormation::Stack
@@ -124,8 +113,8 @@ Resources:
       Parameters:
         ProjectName: !Ref ProjectName
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   IamStack:
     Type: AWS::CloudFormation::Stack
@@ -140,8 +129,8 @@ Resources:
         EcrRepositoryArn: !GetAtt EcrStack.Outputs.RepositoryArn
         DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   ComputeStack:
     Type: AWS::CloudFormation::Stack
@@ -167,8 +156,8 @@ Resources:
         RedisPrimaryEndpointAddress: !GetAtt CacheStack.Outputs.RedisPrimaryEndpointAddress
         RedisPrimaryEndpointPort: !GetAtt CacheStack.Outputs.RedisPrimaryEndpointPort
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   AutoscalingStack:
     Type: AWS::CloudFormation::Stack
@@ -180,8 +169,8 @@ Resources:
         ClusterName: !GetAtt ComputeStack.Outputs.ClusterName
         ServiceName: !GetAtt ComputeStack.Outputs.ServiceName
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
   CicdStack:
     Type: AWS::CloudFormation::Stack
@@ -202,8 +191,8 @@ Resources:
         EcsTaskRoleArn: !GetAtt IamStack.Outputs.EcsTaskRoleArn
         GitHubActionsRoleArn: !GetAtt IamStack.Outputs.GitHubActionsRoleArn
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
+      - Key: Project
+        Value: !Ref ProjectName
 
 Outputs:
   AlbDnsName:
