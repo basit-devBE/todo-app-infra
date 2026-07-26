@@ -17,7 +17,7 @@ parameters:
   # again to add compute/autoscaling/cicd. The image URI is computed
   # automatically from the ECR repo's own URI + ":latest" - nothing else
   # to set. From then on CodeDeploy manages the running image.
-  DeployCompute: 'false'
+  DeployCompute: 'true'
   # ECS task definition revisions are permanent per family and never reset,
   # even after a full stack teardown - the todo-app-task family already has
   # history from prior attempts (revisions 1-6 all exist), so the next
